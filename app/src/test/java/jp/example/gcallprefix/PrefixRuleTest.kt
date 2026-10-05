@@ -39,7 +39,7 @@ class PrefixRuleTest {
         assertEquals("+81120123456", result("+81120123456"))
     }
     @Test fun unsupportedNumbersPreserveOriginal() {
-        listOf("", "112", "911", "12345", "+12025550123", "09012345678,123", "09012345678;123",
+        listOf("", "112", "911", "12345", "09012345678,123", "09012345678;123",
             "09012345678#", "*3109012345678", "０９０１２３４５６７８", "+8109012345678",
             "09012abc678", "090123456789", "tel:09012345678").forEach { assertEquals(it, result(it)) }
     }
@@ -77,7 +77,7 @@ class PrefixRuleTest {
         listOf("0001234567", "0012345678", "0101234567", "01012345678", "0106831234", "00360312345678",
             "006751312345678", "0211234567", "0401234567", "0711234567", "0911234567", "0301234567",
             "0501234567", "0701234567", "0801234567", "0901234567", "03123456789", "06123456789",
-            "090123456789", "+8109012345678", "+12025550123").forEach { number ->
+            "090123456789", "+8109012345678").forEach { number ->
             for (callerId in listOf("", "184", "186")) {
                 val input = callerId + number
                 assertNull(input, PrefixRule.redirectedNumber(input, true) { error("must not query") })
@@ -128,6 +128,72 @@ class PrefixRuleTest {
         listOf("184", "186", "18418409012345678", "18418609012345678", "18618409012345678",
             "18618609012345678", "18409012345678,123", "18609012345678;123", "18409012345678#").forEach {
             assertEquals(it, result(it))
+        }
+    }
+
+    @Test fun internationalE164IsRedirectedWithCallerIdAndWithoutDoublePrefix() {
+        mapOf("+85212345678" to "006385212345678", "+12025550123" to "006312025550123",
+            "+441234567890" to "0063441234567890").forEach { (number, redirected) ->
+            for (callerId in listOf("", "184", "186")) {
+                assertEquals(callerId + redirected, result(callerId + number))
+                assertEquals(callerId + redirected, result(callerId + redirected))
+                assertNull(PrefixRule.redirectedNumber(callerId + number, false) { error("disabled") })
+            }
+        }
+    }
+
+    @Test fun invalidE164AndForeignPostDialArePreservedWithoutEmergencyQuery() {
+        listOf("+", "+0", "+0123456789", "+1", "+1234567890123456", "++85212345678",
+            "+852-1234-5678", "+852 12345678", "+852(12345678)", " +85212345678",
+            "+85212345678 ", "+８５２12345678", "+8521234567a", "+85212345678,123",
+            "+85212345678;123", "+85212345678#", "+85212345678*", "+85212345678p123",
+            "+85212345678w123", "+85212345678\n", "+85212345678\t",
+            "85212345678", "01085212345678", "00185212345678", "003385212345678",
+            "184+85212345678", "186+85212345678").forEach { number ->
+            // The last two cases become duplicated/mixed caller-ID modifiers below.
+            val modifiers = if (number.startsWith("184") || number.startsWith("186")) listOf("184", "186")
+                else listOf("", "184", "186")
+            for (callerId in modifiers) {
+                val input = callerId + number
+                assertNull(input, PrefixRule.redirectedNumber(input, true) { error("must not query") })
+            }
+        }
+    }
+
+    @Test fun internationalE164LengthBoundaries() {
+        assertEquals("0063123456789012345", result("+123456789012345"))
+        assertEquals(CallResult.UNSUPPORTED_NUMBER, PrefixRule.evaluate("+1234567890123456", true) { false }.result)
+    }
+
+    @Test fun internationalEmergencyFailSafeCoversAllRepresentations() {
+        for (callerId in listOf("", "184", "186")) {
+            val original = callerId + "+85212345678"
+            val expected = callerId + "006385212345678"
+            val checked = mutableListOf<String>()
+            assertEquals(expected, PrefixRule.redirectedNumber(original, true) { checked += it; false })
+            assertEquals(listOf(original, "+85212345678", "85212345678", "006385212345678", expected).distinct(), checked)
+            for (candidate in checked) {
+                assertEquals(CallDecision(CallResult.EMERGENCY_NUMBER),
+                    PrefixRule.evaluate(original, true) { it == candidate })
+                assertEquals(CallDecision(CallResult.EMERGENCY_CHECK_FAILED),
+                    PrefixRule.evaluate(original, true) { if (it == candidate) null else false })
+                assertEquals(CallDecision(CallResult.EMERGENCY_CHECK_FAILED),
+                    PrefixRule.evaluate(original, true) { if (it == candidate) throw IllegalStateException() else false })
+            }
+        }
+    }
+
+    @Test fun japanCountryCodeKeepsDomesticRulesAndNeverFallsBackToInternational() {
+        mapOf("+819012345678" to "006309012345678", "+81312345678" to "00630312345678").forEach { (number, redirected) ->
+            for (callerId in listOf("", "184", "186")) assertEquals(callerId + redirected, result(callerId + number))
+        }
+        listOf("+81", "+811", "+81110", "+8109012345678", "+81120123456", "+812012345678",
+            "+816012345678", "+81570123456", "+818001234567", "+81990123456",
+            "+819012345678,123", "+819012345678;123").forEach { number ->
+            for (callerId in listOf("", "184", "186")) {
+                val input = callerId + number
+                assertNull(input, PrefixRule.redirectedNumber(input, true) { error("must not query") })
+            }
         }
     }
 

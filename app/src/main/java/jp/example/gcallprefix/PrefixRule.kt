@@ -9,6 +9,9 @@ object PrefixRule {
     private val excludedPrefixes = listOf("0120", "020", "060", "0570", "0800", "0990", PREFIX)
     // Service numbers are not ordinary geographic subscriber numbers.
     private val specialServicePrefixes = listOf("0170", "0180", "0190")
+    // E.164 syntax: '+' followed by 2..15 ASCII digits, with no leading zero.
+    // This checks format, not country-code allocation or subscriber existence.
+    private val internationalE164 = Regex("\\+[1-9][0-9]{1,14}")
     private val mobileOrIp = Regex("0(?:50|70|80|90)[0-9]{8}")
     // Geographic number shapes, not a database of allocated numbers or active subscribers.
     private val geographic = Regex("0(?:1[1-9]|2[2-9]|3[1-9]|4[2-9]|5[2-9]|6[1-9]|7[2-9]|8[2-9]|9[2-9])[0-9]{7}")
@@ -36,11 +39,21 @@ object PrefixRule {
         val callerId = callerIdPrefixes.firstOrNull(original::startsWith).orEmpty()
         // Strip exactly one caller-ID modifier. Repeated/mixed modifiers remain unsupported.
         val destination = original.removePrefix(callerId)
-        val number = normalizedNumber(destination) ?: return CallDecision(CallResult.UNSUPPORTED_NUMBER)
-        if (number in excludedNumbers) return CallDecision(CallResult.EMERGENCY_NUMBER)
-        if (excludedPrefixes.any(number::startsWith)) return CallDecision(CallResult.EXCLUDED_NUMBER)
-        if (specialServicePrefixes.any(number::startsWith)) return CallDecision(CallResult.EXCLUDED_NUMBER)
-        if (!mobileOrIp.matches(number) && !geographic.matches(number)) return CallDecision(CallResult.UNSUPPORTED_NUMBER)
+        val number = if (destination.startsWith("+") && !destination.startsWith("+81")) {
+            // Foreign numbers must already be strict E.164; do not repair punctuation.
+            val unformattedDestination = raw.removePrefix(callerId)
+            if (!internationalE164.matches(unformattedDestination))
+                return CallDecision(CallResult.UNSUPPORTED_NUMBER)
+            destination.drop(1)
+        } else {
+            val domestic = normalizedNumber(destination) ?: return CallDecision(CallResult.UNSUPPORTED_NUMBER)
+            if (domestic in excludedNumbers) return CallDecision(CallResult.EMERGENCY_NUMBER)
+            if (excludedPrefixes.any(domestic::startsWith)) return CallDecision(CallResult.EXCLUDED_NUMBER)
+            if (specialServicePrefixes.any(domestic::startsWith)) return CallDecision(CallResult.EXCLUDED_NUMBER)
+            if (!mobileOrIp.matches(domestic) && !geographic.matches(domestic))
+                return CallDecision(CallResult.UNSUPPORTED_NUMBER)
+            domestic
+        }
 
         // 184/186 must precede 0063, and emergency checks must also see the bare destination.
         val prefixed = PREFIX + number
